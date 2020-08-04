@@ -35,6 +35,7 @@ THE SOFTWARE.
 '''
 
 import bakebit_128_64_oled as oled
+import bakebit_nanohat_pages as pages
 from PIL import Image
 from PIL import ImageFont
 from PIL import ImageDraw
@@ -45,6 +46,11 @@ import threading
 import signal
 import os
 import socket
+import fcntl
+import struct
+import datetime
+import pihole
+import current_device
 
 global width
 width=128
@@ -52,11 +58,23 @@ global height
 height=64
 
 global pageCount
-pageCount=2
+pageCount=3
 global pageIndex
 pageIndex=0
 global showPageIndicator
-showPageIndicator=False
+showPageIndicator=True
+
+global pageSleep
+pageSleep=120
+global pageSleepCountdown
+pageSleepCountdown=pageSleep
+
+isPiholeInstalled=False
+
+global enabledMarkerShownSeconds
+enabledMarkerShownSeconds=5
+global enabledCounter
+enabledCounter=0
 
 oled.init()  #initialze SEEED OLED display
 oled.setNormalDisplay()      #Set display to normal mode (i.e non-inverse mode)
@@ -65,44 +83,17 @@ oled.setHorizontalMode()
 global drawing 
 drawing = False
 
-global image
 image = Image.new('1', (width, height))
-global draw
 draw = ImageDraw.Draw(image)
-global fontb24
-fontb24 = ImageFont.truetype('DejaVuSansMono-Bold.ttf', 24);
-global font14 
-font14 = ImageFont.truetype('DejaVuSansMono.ttf', 14);
-global smartFont
-smartFont = ImageFont.truetype('DejaVuSansMono-Bold.ttf', 10);
-global fontb14
-fontb14 = ImageFont.truetype('DejaVuSansMono-Bold.ttf', 14);
-global font11
-font11 = ImageFont.truetype('DejaVuSansMono.ttf', 11);
 
 global lock
 lock = threading.Lock()
-
-def get_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # doesn't even have to be reachable
-        s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
-    except:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
 
 def draw_page():
     global drawing
     global image
     global draw
     global oled
-    global font
-    global font14
-    global smartFont
     global width
     global height
     global pageCount
@@ -111,8 +102,12 @@ def draw_page():
     global width
     global height
     global lock
-
-    lock.acquire()
+    global pageSleepCountdown
+    global enabledMarkerShownSeconds
+    global enabledCounter
+    global isPiholeInstalled
+    
+    lock.acquire() # make this injected in the function
     is_drawing = drawing
     page_index = pageIndex
     lock.release()
@@ -120,78 +115,45 @@ def draw_page():
     if is_drawing:
         return
 
+    #if the countdown is zero we should be sleeping (blank the display to reduce screenburn)
+    if pageSleepCountdown == 1:
+        oled.clearDisplay()
+        pageSleepCountdown = pageSleepCountdown - 1
+        return
+
+    if pageSleepCountdown == 0:
+        return
+
+    pageSleepCountdown = pageSleepCountdown - 1
+
     lock.acquire()
     drawing = True
     lock.release()
-    
+
     # Draw a black filled box to clear the image.            
     draw.rectangle((0,0,width,height), outline=0, fill=0)
+    
     # Draw current page indicator
-    if showPageIndicator:
-        dotWidth=4
-        dotPadding=2
-        dotX=width-dotWidth-1
-        dotTop=(height-pageCount*dotWidth-(pageCount-1)*dotPadding)/2
-        for i in range(pageCount):
-            if i==page_index:
-                draw.rectangle((dotX, dotTop, dotX+dotWidth, dotTop+dotWidth), outline=255, fill=255)
-            else:
-                draw.rectangle((dotX, dotTop, dotX+dotWidth, dotTop+dotWidth), outline=255, fill=0)
-            dotTop=dotTop+dotWidth+dotPadding
+    if showPageIndicator: draw_page_indicator()
 
-    if page_index==0:
-        text = time.strftime("%A")
-        draw.text((2,2),text,font=font14,fill=255)
-        text = time.strftime("%e %b %Y")
-        draw.text((2,18),text,font=font14,fill=255)
-        text = time.strftime("%X")
-        draw.text((2,40),text,font=fontb24,fill=255)
-    elif page_index==1:
-        # Draw some shapes.
-        # First define some constants to allow easy resizing of shapes.
-        padding = 2
-        top = padding
-        bottom = height-padding
-        # Move left to right keeping track of the current x position for drawing shapes.
-        x = 0
-	IPAddress = get_ip()
-        cmd = "top -bn1 | grep load | awk '{printf \"CPU Load: %.2f\", $(NF-2)}'"
-        CPU = subprocess.check_output(cmd, shell = True )
-        cmd = "free -m | awk 'NR==2{printf \"Mem: %s/%sMB %.2f%%\", $3,$2,$3*100/$2 }'"
-        MemUsage = subprocess.check_output(cmd, shell = True )
-        cmd = "df -h | awk '$NF==\"/\"{printf \"Disk: %d/%dGB %s\", $3,$2,$5}'"
-        Disk = subprocess.check_output(cmd, shell = True )
-        tempI = int(open('/sys/class/thermal/thermal_zone0/temp').read());
-        if tempI>1000:
-            tempI = tempI/1000
-        tempStr = "CPU TEMP: %sC" % str(tempI)
-
-        draw.text((x, top+5),       "IP: " + str(IPAddress),  font=smartFont, fill=255)
-        draw.text((x, top+5+12),    str(CPU), font=smartFont, fill=255)
-        draw.text((x, top+5+24),    str(MemUsage),  font=smartFont, fill=255)
-        draw.text((x, top+5+36),    str(Disk),  font=smartFont, fill=255)
-        draw.text((x, top+5+48),    tempStr,  font=smartFont, fill=255)
-    elif page_index==3: #shutdown -- no
-        draw.text((2, 2),  'Shutdown?',  font=fontb14, fill=255)
-
-        draw.rectangle((2,20,width-4,20+16), outline=0, fill=0)
-        draw.text((4, 22),  'Yes',  font=font11, fill=255)
-
-        draw.rectangle((2,38,width-4,38+16), outline=0, fill=255)
-        draw.text((4, 40),  'No',  font=font11, fill=0)
-
-    elif page_index==4: #shutdown -- yes
-        draw.text((2, 2),  'Shutdown?',  font=fontb14, fill=255)
-
-        draw.rectangle((2,20,width-4,20+16), outline=0, fill=255)
-        draw.text((4, 22),  'Yes',  font=font11, fill=0)
-
-        draw.rectangle((2,38,width-4,38+16), outline=0, fill=0)
-        draw.text((4, 40),  'No',  font=font11, fill=255)
-
-    elif page_index==5:
-        draw.text((2, 2),  'Shutting down',  font=fontb14, fill=255)
-        draw.text((2, 20),  'Please wait',  font=font11, fill=255)
+    if page_index == pages.CLOCK:
+        pages.draw_clock(draw)
+    elif page_index == pages.CPU_STATS:
+        pages.draw_cpu_stats(draw)
+    elif page_index == pages.PIHOLE_STATS:
+        pages.draw_pihole_stats(draw)
+    elif page_index == pages.REBOOT_YES:
+        pages.draw_reboot_yes(draw, width)
+    elif page_index == pages.REBOOT_NO:
+        pages.draw_reboot_no(draw, width)
+    elif page_index == pages.PIHOLE_YES:
+        pages.draw_pihole_yes(draw, width)
+    elif page_index == pages.PIHOLE_NO:
+        pages.draw_pihole_no(draw, width)
+    elif page_index == pages.PIHOLE_STATUS:
+        pages.draw_pihole_status(draw)
+    elif page_index == pages.REBOOTING:
+        pages.draw_rebooting(draw)
 
     oled.drawImage(image)
 
@@ -199,18 +161,13 @@ def draw_page():
     drawing = False
     lock.release()
 
-
-def is_showing_power_msgbox():
-    global pageIndex
-    lock.acquire()
-    page_index = pageIndex
-    lock.release()
-    if page_index==3 or page_index==4:
-        return True
-    return False
-
+def is_showing_disable_msgbox():
+    return pageIndex in pages.YES_PAGES + pages.NO_PAGES
 
 def update_page_index(pi):
+    if not isPiholeInstalled and pi in pages.PIHOLE_PAGES:
+        pi = pages.CLOCK
+
     global pageIndex
     lock.acquire()
     pageIndex = pi
@@ -218,57 +175,94 @@ def update_page_index(pi):
 
 def receive_signal(signum, stack):
     global pageIndex
+    global pageSleepCountdown
+    global isPiholeInstalled
+    global pageSleep
+
+    if pageSleepCountdown == 0:
+        image1 = Image.open('pihole.png').convert('1')
+        oled.drawImage(image1)
+        time.sleep(0.5)
+
+    pageSleepCountdown = pageSleep #user pressed a button, reset the sleep counter
 
     lock.acquire()
-    page_index = pageIndex
+    isPiholeInstalled = pihole.is_installed()
     lock.release()
 
-    if page_index==5:
-        return
-
-    if signum == signal.SIGUSR1:
-        print 'K1 pressed'
-        if is_showing_power_msgbox():
-            if page_index==3:
-                update_page_index(4)
+    if signum == signal.SIGUSR1: # K1 pressed
+        if is_showing_disable_msgbox():
+            if pageIndex in pages.YES_PAGES:
+                update_page_index(pages.PIHOLE_NO if pageIndex == pages.PIHOLE_YES else pages.REBOOT_NO)
             else:
-                update_page_index(3)
-            draw_page()
+                update_page_index(pages.PIHOLE_YES if pageIndex == pages.PIHOLE_NO else pages.REBOOT_YES)
+            # draw_page()
         else:
-            pageIndex=0
-            draw_page()
-
-    if signum == signal.SIGUSR2:
-        print 'K2 pressed'
-        if is_showing_power_msgbox():
-            if page_index==4:
-                update_page_index(5)
-                draw_page()
- 
+            update_page_index(pages.CLOCK)
+            # draw_page()
+    elif signum == signal.SIGUSR2: # K2 pressed
+        if is_showing_disable_msgbox():
+            if pageIndex == pages.PIHOLE_YES:
+                if pihole.status() is pihole.ENABLE:
+                    pihole.disable(str(pihole.DISABLE_TIME_SECONDS) + "s")
+                else:
+                    pihole.enable()
+                update_page_index(pages.PIHOLE_STATUS)
+                # draw_page()
+            elif pageIndex == pages.REBOOT_YES:
+                update_page_index(pages.REBOOTING) # restart is handled somewhere else
+                # draw_page()
             else:
-                update_page_index(0)
-                draw_page()
+                update_page_index(pages.CLOCK)
+                # draw_page()
         else:
-            update_page_index(1)
-            draw_page()
-
-    if signum == signal.SIGALRM:
-        print 'K3 pressed'
-        if is_showing_power_msgbox():
-            update_page_index(0)
-            draw_page()
+            if isPiholeInstalled:
+                if pageIndex == pages.PIHOLE_STATS:
+                    update_page_index(pages.CPU_STATS)
+                else:
+                    update_page_index(pages.PIHOLE_STATS)
+            else: update_page_index(pages.CPU_STATS)
+            # draw_page()
+    elif signum == signal.SIGALRM: # K3 pressed
+        if is_showing_disable_msgbox():
+            if pageIndex == pages.PIHOLE_NO:
+                update_page_index(pages.REBOOT_NO)
+            elif pageIndex == pages.REBOOT_NO:
+                update_page_index(pages.PIHOLE_NO)
+            else: update_page_index(pages.CLOCK)
+            # draw_page()
         else:
-            update_page_index(3)
-            draw_page()
+            if isPiholeInstalled:
+                update_page_index(pages.PIHOLE_NO)
+            else:
+                update_page_index(pages.REBOOT_NO)
+            # draw_page()
+    
+    draw_page()
 
+def draw_page_indicator():
+    dotWidth, dotPadding = 4, 2
+    dotX = width - dotWidth - 1
+    dotTop = (height - pageCount * dotWidth - (pageCount - 1) * dotPadding) / 2
+    for i in pages.INDICATOR_PAGES:
+        if pageIndex in pages.INDICATOR_PAGES:
+            if i == pageIndex:
+                draw.rectangle((dotX, dotTop, dotX+dotWidth, dotTop+dotWidth), outline=255, fill=255)
+            else:
+                draw.rectangle((dotX, dotTop, dotX+dotWidth, dotTop+dotWidth), outline=255, fill=0)
+        else:
+            draw.rectangle((dotX, dotTop, dotX+dotWidth, dotTop+dotWidth), outline=0, fill=0)
+        dotTop=dotTop+dotWidth+dotPadding
 
-image0 = Image.open('friendllyelec.png').convert('1')
+image0 = Image.open('pihole.png').convert('1')
 oled.drawImage(image0)
 time.sleep(2)
 
 signal.signal(signal.SIGUSR1, receive_signal)
 signal.signal(signal.SIGUSR2, receive_signal)
 signal.signal(signal.SIGALRM, receive_signal)
+
+isPiholeInstalled = pihole.is_installed()
 
 while True:
     try:
@@ -278,7 +272,7 @@ while True:
         page_index = pageIndex
         lock.release()
 
-        if page_index==5:
+        if page_index == pages.REBOOTING:
             time.sleep(2)
             while True:
                 lock.acquire()
@@ -294,10 +288,11 @@ while True:
                     time.sleep(.1)
                     continue
             time.sleep(1)
-            os.system('systemctl poweroff')
+            os.system('systemctl reboot')
             break
+
         time.sleep(1)
-    except KeyboardInterrupt:                                                                                                          
-        break                     
-    except IOError:                                                                              
+    except KeyboardInterrupt:
+        break
+    except IOError:
         print ("Error")
