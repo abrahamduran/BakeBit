@@ -26,7 +26,8 @@ def ip_address(interface_name):
             0x8915,  # SIOCGIFADDR
             struct.pack('256s', interface_name[:15])
         )[20:24])
-    except: return ip_address()
+    except:
+        return ip_address()
 
 def ip_address():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -42,4 +43,8 @@ def ip_address():
 
 # Private functions
 def __call_command(cmd):
-    return subprocess.check_output(cmd, shell = True)
+    try:
+        return subprocess.check_output(cmd, shell = True)
+    except Exception as ex:
+        print(ex)
+        return 'N/A'

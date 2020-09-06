@@ -8,6 +8,7 @@ def is_installed():
     try:
         return __call_command('pihole') is 0
     except:
+        print('PiHole is not installed.')
         return False
 
 def enable():
@@ -45,8 +46,16 @@ def unique_clients():
 
 # Private functions
 def __request_section(section):
-    cmd = "curl -f -s http://127.0.0.1/admin/api.php | jq ." + section
-    return subprocess.check_output(cmd, shell = True).strip()
+    try:
+        cmd = "curl -f -s http://127.0.0.1/admin/api.php | jq ." + section
+        return subprocess.check_output(cmd, shell = True).strip()
+    except Exception as ex:
+        print(ex)
+        return 'N/A'
 
 def __call_command(cmd):
-    return subprocess.call(cmd, shell = True, stdout=subprocess.PIPE)
+    try:
+        return subprocess.call(cmd, shell = True, stdout=subprocess.PIPE)
+    except Exception as ex:
+        print(ex)
+        return 'N/A'
